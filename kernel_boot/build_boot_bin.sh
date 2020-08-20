@@ -28,11 +28,11 @@ OUTPUT_DIR=./boards/$BOARD_NAME/output_boot_bin
 # 	exit 1
 # }
 
-# depends () {
-# 	echo Xilinx $1 must be installed and in your PATH
-# 	echo try: source /opt/Xilinx/Vivado/201x.x/settings64.sh
-# 	exit 1
-# }
+depends () {
+	echo Xilinx $1 must be installed and in your PATH
+	echo try: source /opt/Xilinx/Vivado/201x.x/settings64.sh
+	exit 1
+}
 
 ### Check command line parameters
 echo $HDF_FILE | grep -q ".hdf" || usage

@@ -42,6 +42,8 @@
 #include <linux/gpio.h>
 #include <linux/leds.h>
 
+#include <linux/net.h>
+
 #define IIO_AD9361_USE_PRIVATE_H_
 #include "ad9361/ad9361_regs.h"
 #include "ad9361/ad9361.h"
@@ -52,6 +54,40 @@
 #include "../user_space/sdrctl_src/nl80211_testmode_def.h"
 #include "hw_def.h"
 #include "sdr.h"
+
+
+#include <linux/circ_buf.h>
+// Networking stuff
+#include <linux/types.h>
+#include <linux/socket.h>
+#include <linux/inet.h>
+extern struct net init_net;
+
+static char destination[] = "192.168.10.1";
+
+static struct socket *socket;
+
+struct sockaddr_in addr = {
+    .sin_family = AF_INET,
+};
+
+struct msghdr msgheader = {
+    .msg_name = &addr,
+    .msg_namelen = sizeof(addr),
+    .msg_control = NULL,
+    .msg_controllen = 0,
+    .msg_flags = 0
+};
+
+// Tasklet
+void info_tasklet_do(unsigned long);
+DECLARE_TASKLET(info_tasklet, info_tasklet_do, 0);
+
+// Circular buffer
+#define BUFFSIZE 128
+uint32_t circ_buff[BUFFSIZE];
+unsigned long circ_head = 0;
+unsigned long circ_tail = 0;
 
 // driver API of component driver
 extern struct tx_intf_driver_api *tx_intf_api;
@@ -514,6 +550,62 @@ static irqreturn_t openwifi_tx_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static irqreturn_t openwifi_info_interrupt(int irq, void *dev_id)
+{
+    unsigned long head = circ_head;
+    unsigned long tail = ACCESS_ONCE(circ_tail);
+
+    if (CIRC_SPACE(head, tail, BUFFSIZE) >= 1) {
+        circ_buff[head] = xpu_api->XPU_REG_BACKOFF_COUNTER_read();
+        smp_wmb();
+
+        circ_head = (head+1) & (BUFFSIZE -1);
+    } else {
+        printk(KERN_ERR "%s openwifi_info_interrupt: Buffer full\n", sdr_compatible_str);
+    }
+
+    tasklet_schedule(&info_tasklet);
+
+    return IRQ_HANDLED;
+}
+
+void info_tasklet_do(unsigned long unused) {
+    static uint32_t msg[BUFFSIZE];
+    int ret;
+    unsigned todo, i;
+    unsigned long head, tail;
+    uint32_t item;
+    struct kvec msgvec = {
+        .iov_base = msg
+    };
+
+    head = ACCESS_ONCE(circ_head);
+    tail = circ_tail;
+
+    todo = CIRC_CNT(head, tail, BUFFSIZE);
+    if (todo < 32) {
+        return;
+    }
+
+    for (i = 0; i < todo; i++) {
+        smp_read_barrier_depends();
+
+        item = circ_buff[tail];
+
+        msg[i] = item;
+
+        smp_mb();
+
+        tail = circ_tail = (tail + 1) & (BUFFSIZE - 1);
+    }
+
+    msgvec.iov_len = todo * sizeof(uint32_t);
+    ret = kernel_sendmsg(socket, &msgheader, &msgvec, 1, msgvec.iov_len);
+    if (ret < 0) {
+        printk(KERN_ERR "%s openwifi_info_tasklet: Could not send message", sdr_compatible_str);
+    }
+}
+
 u32 gen_parity(u32 v){
 	v ^= v >> 1;
 	v ^= v >> 2;
@@ -862,6 +954,23 @@ static int openwifi_start(struct ieee80211_hw *dev)
 	int ret, i, rssi_half_db_offset, agc_gain_delay;//rssi_half_db_th, 
 	u32 reg;
 
+    // Setup networking
+    ret = in4_pton(destination, -1, (u8 *)&addr.sin_addr.s_addr, -1, NULL);
+    if (ret < 0) {
+        printk(KERN_ERR "Could not parse ip address\n");
+        return 1;
+    }
+
+    addr.sin_port = htons(8000);
+
+    printk(KERN_INFO "Generated address 0x%08x\n", addr.sin_addr.s_addr);
+
+    ret = sock_create_kern(&init_net, PF_INET, SOCK_DGRAM, IPPROTO_UDP, &socket);
+    if (ret < 0) {
+        printk(KERN_ERR "Could not create socket\n");
+        return 1;
+    }
+
 	for (i=0; i<MAX_NUM_VIF; i++) {
 		priv->vif[i] = NULL;
 	}
@@ -968,6 +1077,7 @@ static int openwifi_start(struct ieee80211_hw *dev)
 	tx_intf_api->TX_INTF_REG_INTERRUPT_SEL_write(0x3004F); //disable tx interrupt
 	rx_intf_api->RX_INTF_REG_INTERRUPT_TEST_write(0x100); // disable rx interrupt by interrupt test mode
 	rx_intf_api->RX_INTF_REG_M_AXIS_RST_write(1); // hold M AXIS in reset status
+    xpu_api->XPU_REG_INFO_INTR_write(2); // Disable info interrupt
 
 	if (test_mode==1) {
 		printk("%s openwifi_start: test_mode==1\n",sdr_compatible_str);
@@ -1028,9 +1138,20 @@ static int openwifi_start(struct ieee80211_hw *dev)
 		printk("%s openwifi_start: irq_tx %d\n", sdr_compatible_str, priv->irq_tx);
 	}
 
+    priv->irq_info = irq_of_parse_and_map(priv->pdev->dev.of_node, 0);
+    ret = request_irq(priv->irq_info, openwifi_info_interrupt,
+            IRQF_SHARED, "sdr,info_itrpt", dev);
+    if (ret) {
+        wiphy_err(dev->wiphy, "openwifi_start: failed to register IRQ handler openwifi_info_interrupt\n");
+        goto err_free_rings;
+    } else {
+        printk("%s openwifi_start: irq_info %d\n", sdr_compatible_str, priv->irq_info);
+    }
+
 	rx_intf_api->RX_INTF_REG_INTERRUPT_TEST_write(0x000); // enable rx interrupt get normal fcs valid pass through ddc to ARM
 	tx_intf_api->TX_INTF_REG_INTERRUPT_SEL_write(0x4F); //enable tx interrupt
 	rx_intf_api->RX_INTF_REG_M_AXIS_RST_write(0); // release M AXIS
+    xpu_api->XPU_REG_INFO_INTR_write(0); // enable info interrupt
 	xpu_api->XPU_REG_TSF_LOAD_VAL_write(0,0); // reset tsf timer
 
 	//ieee80211_wake_queue(dev, 0);
@@ -1079,6 +1200,7 @@ static void openwifi_stop(struct ieee80211_hw *dev)
 	tx_intf_api->TX_INTF_REG_INTERRUPT_SEL_write(0x3004F); //disable tx interrupt
 	rx_intf_api->RX_INTF_REG_INTERRUPT_TEST_write(0x100); // disable fcs_valid by interrupt test mode
 	rx_intf_api->RX_INTF_REG_M_AXIS_RST_write(1); // hold M AXIS in reset status
+    xpu_api->XPU_REG_INFO_INTR_write(2); // disable info interrupt
 
 	for (i=0; i<MAX_NUM_VIF; i++) {
 		priv->vif[i] = NULL;
@@ -1099,6 +1221,7 @@ static void openwifi_stop(struct ieee80211_hw *dev)
 
 	free_irq(priv->irq_rx, dev);
 	free_irq(priv->irq_tx, dev);
+	free_irq(priv->irq_info, dev);
 
 normal_out:
 	printk("%s openwifi_stop\n", sdr_compatible_str);

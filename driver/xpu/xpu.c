@@ -132,6 +132,18 @@ static inline u32 XPU_REG_BAND_CHANNEL_read(void){
 	return reg_read(XPU_REG_BAND_CHANNEL_ADDR);
 }
 
+static inline u32 XPU_REG_BACKOFF_COUNTER_read(void){
+	return reg_read(XPU_REG_BACKOFF_COUNTER_ADDR);
+}
+
+static inline u32 XPU_REG_INFO_INTR_read(void){
+	return reg_read(XPU_REG_INFO_INTR_ADDR);
+}
+
+static inline void XPU_REG_INFO_INTR_write(u32 value){
+    reg_write(XPU_REG_INFO_INTR_ADDR, value);
+}
+
 static inline u32 XPU_REG_TRX_STATUS_read(void){
 	return reg_read(XPU_REG_TRX_STATUS_ADDR);
 }
@@ -457,6 +469,11 @@ static int dev_probe(struct platform_device *pdev)
 
 	xpu_api->XPU_REG_BAND_CHANNEL_write=XPU_REG_BAND_CHANNEL_write;
 	xpu_api->XPU_REG_BAND_CHANNEL_read=XPU_REG_BAND_CHANNEL_read;
+
+    xpu_api->XPU_REG_BACKOFF_COUNTER_read=XPU_REG_BACKOFF_COUNTER_read;
+
+    xpu_api->XPU_REG_INFO_INTR_read=XPU_REG_INFO_INTR_read;
+    xpu_api->XPU_REG_INFO_INTR_write=XPU_REG_INFO_INTR_write;
 
 	xpu_api->XPU_REG_TRX_STATUS_read=XPU_REG_TRX_STATUS_read;
 	xpu_api->XPU_REG_TX_RESULT_read=XPU_REG_TX_RESULT_read;

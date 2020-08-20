@@ -329,6 +329,7 @@ struct openwifi_priv {
 
 	int irq_rx;
 	int irq_tx;
+    int irq_info;
 
 	// u32 call_counter;
 	u8 *rx_cyclic_buf;

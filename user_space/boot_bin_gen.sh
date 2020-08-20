@@ -34,7 +34,7 @@ home_dir=$(pwd)
 set -ex
 
 # check if user entered the right path to SDK
-source $XILINX_DIR/SDK/2018.3/settings64.sh
+# source $XILINX_DIR/SDK/2018.3/settings64.sh HEHE
 
 cd $OPENWIFI_DIR/kernel_boot
 

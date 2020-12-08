@@ -245,7 +245,7 @@ const char *xpu_compatible_str = "sdr,xpu";
 #define XPU_REG_TSF_LOAD_VAL_LOW_ADDR     (2*4)
 #define XPU_REG_TSF_LOAD_VAL_HIGH_ADDR    (3*4)
 #define XPU_REG_BAND_CHANNEL_ADDR         (4*4)
-#define XPU_REG_BACKOFF_COUNTER_ADDR      (5*4)
+
 #define XPU_REG_INFO_INTR_ADDR            (6*4)
 #define XPU_REG_RSSI_DB_CFG_ADDR          (7*4)
 #define XPU_REG_LBT_TH_ADDR               (8*4)
@@ -288,6 +288,7 @@ const char *xpu_compatible_str = "sdr,xpu";
 
 #define XPU_REG_RSSI_HALF_DB_ADDR         (60*4)
 #define XPU_REG_IQ_RSSI_HALF_DB_ADDR      (61*4)
+#define XPU_REG_BACKOFF_COUNTER_ADDR      (62*4)
 
 enum xpu_mode {
 	XPU_TEST = 0,
@@ -339,8 +340,6 @@ struct xpu_driver_api {
 	void (*XPU_REG_BAND_CHANNEL_write)(u32 value);
 	u32  (*XPU_REG_BAND_CHANNEL_read)(void);
 
-	u32 (*XPU_REG_BACKOFF_COUNTER_read)(void);
-
 	u32 (*XPU_REG_INFO_INTR_read)(void);
 	void (*XPU_REG_INFO_INTR_write)(u32 value);
 
@@ -390,4 +389,6 @@ struct xpu_driver_api {
 	void (*XPU_REG_MAX_NUM_RETRANS_write)(u32 value);
 
 	void (*XPU_REG_MAC_ADDR_write)(u8 *mac_addr);
+
+	u32 (*XPU_REG_BACKOFF_COUNTER_read)(void);
 };

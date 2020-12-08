@@ -85,9 +85,15 @@ DECLARE_TASKLET(info_tasklet, info_tasklet_do, 0);
 
 // Circular buffer
 #define BUFFSIZE 128
-uint32_t circ_buff[BUFFSIZE];
+struct measurement {
+    uint32_t stamp;
+    uint32_t value;
+};
+struct measurement circ_buff[BUFFSIZE];
 unsigned long circ_head = 0;
 unsigned long circ_tail = 0;
+
+uint64_t starttime;
 
 // driver API of component driver
 extern struct tx_intf_driver_api *tx_intf_api;
@@ -556,7 +562,9 @@ static irqreturn_t openwifi_info_interrupt(int irq, void *dev_id)
     unsigned long tail = ACCESS_ONCE(circ_tail);
 
     if (CIRC_SPACE(head, tail, BUFFSIZE) >= 1) {
-        circ_buff[head] = xpu_api->XPU_REG_BACKOFF_COUNTER_read();
+        //circ_buff[head] = xpu_api->XPU_REG_BACKOFF_COUNTER_read();
+        circ_buff[head].stamp = ktime_to_ms(ktime_get()) - starttime;
+        circ_buff[head].value = xpu_api->XPU_REG_BACKOFF_COUNTER_read();
         smp_wmb();
 
         circ_head = (head+1) & (BUFFSIZE -1);
@@ -570,11 +578,11 @@ static irqreturn_t openwifi_info_interrupt(int irq, void *dev_id)
 }
 
 void info_tasklet_do(unsigned long unused) {
-    static uint32_t msg[BUFFSIZE];
+    static struct measurement msg[BUFFSIZE];
     int ret;
     unsigned todo, i;
     unsigned long head, tail;
-    uint32_t item;
+    struct measurement item;
     struct kvec msgvec = {
         .iov_base = msg
     };
@@ -599,7 +607,7 @@ void info_tasklet_do(unsigned long unused) {
         tail = circ_tail = (tail + 1) & (BUFFSIZE - 1);
     }
 
-    msgvec.iov_len = todo * sizeof(uint32_t);
+    msgvec.iov_len = todo * sizeof(struct measurement);
     ret = kernel_sendmsg(socket, &msgheader, &msgvec, 1, msgvec.iov_len);
     if (ret < 0) {
         printk(KERN_ERR "%s openwifi_info_tasklet: Could not send message", sdr_compatible_str);
@@ -954,6 +962,8 @@ static int openwifi_start(struct ieee80211_hw *dev)
 	int ret, i, rssi_half_db_offset, agc_gain_delay;//rssi_half_db_th, 
 	u32 reg;
 
+    starttime = ktime_to_ms(ktime_get());
+
     // Setup networking
     ret = in4_pton(destination, -1, (u8 *)&addr.sin_addr.s_addr, -1, NULL);
     if (ret < 0) {
@@ -1138,6 +1148,7 @@ static int openwifi_start(struct ieee80211_hw *dev)
 		printk("%s openwifi_start: irq_tx %d\n", sdr_compatible_str, priv->irq_tx);
 	}
 
+    printk("Setting up info interrupt\n");
     priv->irq_info = irq_of_parse_and_map(priv->pdev->dev.of_node, 0);
     ret = request_irq(priv->irq_info, openwifi_info_interrupt,
             IRQF_SHARED, "sdr,info_itrpt", dev);

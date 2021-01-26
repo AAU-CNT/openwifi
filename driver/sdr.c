@@ -83,12 +83,13 @@ struct msghdr msgheader = {
 void info_tasklet_do(unsigned long);
 DECLARE_TASKLET(info_tasklet, info_tasklet_do, 0);
 
-// Circular buffer
-#define BUFFSIZE 128
+// Circular buffer, currently must be smaller than 255
+#define BUFFSIZE 16
 struct measurement {
-    uint32_t stamp;
+    uint64_t stamp;
     uint32_t value;
-};
+} __attribute__((packed));
+
 struct measurement circ_buff[BUFFSIZE];
 unsigned long circ_head = 0;
 unsigned long circ_tail = 0;
@@ -558,13 +559,16 @@ static irqreturn_t openwifi_tx_interrupt(int irq, void *dev_id)
 
 static irqreturn_t openwifi_info_interrupt(int irq, void *dev_id)
 {
+    uint32_t readout = xpu_api->XPU_REG_BACKOFF_COUNTER_read();
+    uint64_t stamp = ktime_get_ns();
+
     unsigned long head = circ_head;
     unsigned long tail = ACCESS_ONCE(circ_tail);
 
     if (CIRC_SPACE(head, tail, BUFFSIZE) >= 1) {
         //circ_buff[head] = xpu_api->XPU_REG_BACKOFF_COUNTER_read();
-        circ_buff[head].stamp = ktime_to_ms(ktime_get()) - starttime;
-        circ_buff[head].value = xpu_api->XPU_REG_BACKOFF_COUNTER_read();
+        circ_buff[head].stamp = stamp;
+        circ_buff[head].value = readout;
         smp_wmb();
 
         circ_head = (head+1) & (BUFFSIZE -1);
@@ -578,7 +582,9 @@ static irqreturn_t openwifi_info_interrupt(int irq, void *dev_id)
 }
 
 void info_tasklet_do(unsigned long unused) {
-    static struct measurement msg[BUFFSIZE];
+    static uint8_t msg[BUFFSIZE * sizeof(struct measurement) + 1];
+    struct measurement *databuff = (struct measurement *)(msg+1); // First byte is the number of values, TODO use a struct
+
     int ret;
     unsigned todo, i;
     unsigned long head, tail;
@@ -595,19 +601,24 @@ void info_tasklet_do(unsigned long unused) {
         return;
     }
 
+    msg[0] = (uint8_t) todo;
+
     for (i = 0; i < todo; i++) {
         smp_read_barrier_depends();
 
         item = circ_buff[tail];
 
-        msg[i] = item;
+        databuff[i] = item;
+        printk(KERN_INFO "%s openwifi_info_tasklet: MEAS %d, ts=%lld, value=%d", sdr_compatible_str, i, item.stamp, item.value);
 
         smp_mb();
 
         tail = circ_tail = (tail + 1) & (BUFFSIZE - 1);
     }
 
-    msgvec.iov_len = todo * sizeof(struct measurement);
+    printk(KERN_INFO "%s openwifi_info_tasklet: Send %d measurements", sdr_compatible_str, todo);
+
+    msgvec.iov_len = todo * sizeof(struct measurement) + 1;
     ret = kernel_sendmsg(socket, &msgheader, &msgvec, 1, msgvec.iov_len);
     if (ret < 0) {
         printk(KERN_ERR "%s openwifi_info_tasklet: Could not send message", sdr_compatible_str);

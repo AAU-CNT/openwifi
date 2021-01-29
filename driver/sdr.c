@@ -84,7 +84,7 @@ void info_tasklet_do(unsigned long);
 DECLARE_TASKLET(info_tasklet, info_tasklet_do, 0);
 
 // Circular buffer, currently must be smaller than 255
-#define BUFFSIZE 16
+#define BUFFSIZE 32
 struct measurement {
     uint64_t stamp;
     uint32_t value;
@@ -582,8 +582,9 @@ static irqreturn_t openwifi_info_interrupt(int irq, void *dev_id)
 }
 
 void info_tasklet_do(unsigned long unused) {
+    // First byte is the number of values, TODO use a struct
     static uint8_t msg[BUFFSIZE * sizeof(struct measurement) + 1];
-    struct measurement *databuff = (struct measurement *)(msg+1); // First byte is the number of values, TODO use a struct
+    struct measurement *databuff = (struct measurement *)(msg+1);
 
     int ret;
     unsigned todo, i;
@@ -597,7 +598,7 @@ void info_tasklet_do(unsigned long unused) {
     tail = circ_tail;
 
     todo = CIRC_CNT(head, tail, BUFFSIZE);
-    if (todo < 32) {
+    if (todo < (BUFFSIZE/2)) {
         return;
     }
 
@@ -609,14 +610,11 @@ void info_tasklet_do(unsigned long unused) {
         item = circ_buff[tail];
 
         databuff[i] = item;
-        printk(KERN_INFO "%s openwifi_info_tasklet: MEAS %d, ts=%lld, value=%d", sdr_compatible_str, i, item.stamp, item.value);
 
         smp_mb();
 
         tail = circ_tail = (tail + 1) & (BUFFSIZE - 1);
     }
-
-    printk(KERN_INFO "%s openwifi_info_tasklet: Send %d measurements", sdr_compatible_str, todo);
 
     msgvec.iov_len = todo * sizeof(struct measurement) + 1;
     ret = kernel_sendmsg(socket, &msgheader, &msgvec, 1, msgvec.iov_len);
